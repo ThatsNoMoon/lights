@@ -1,0 +1,30 @@
+[package]
+name = "lights"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "lights"
+test = false
+bench = false
+
+[dependencies]
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.2"
+defmt = "0.3.2"
+defmt-rtt = "0.4.0"
+embedded-hal = "0.2.7"
+embedded-time = "0.12.1"
+rp-pico = "0.7.0"
+rp2040-boot2 = "0.2.1"
+rp2040-hal = { version = "0.8.0", features = ["rt"] }
+ws2812-pio = "0.6.0"
+
+[profile.release]
+codegen-units = 1
+debug = false
+panic = 'abort'
+lto = true
+opt-level = "z"
+incremental = false
+strip = true
