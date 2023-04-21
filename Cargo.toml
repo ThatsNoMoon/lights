@@ -18,6 +18,7 @@ embedded-time = "0.12.1"
 rp-pico = "0.7.0"
 rp2040-boot2 = "0.2.1"
 rp2040-hal = { version = "0.8.0", features = ["rt"] }
+smart-leds = "0.3.0"
 ws2812-pio = "0.6.0"
 
 [profile.release]
