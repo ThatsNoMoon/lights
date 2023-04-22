@@ -4,17 +4,20 @@
 mod panic_handler;
 mod ring_buffer;
 
+use core::{
+	iter::once,
+	ops::{Add, Div},
+};
+
 use cortex_m::delay::Delay;
 use cortex_m_rt::entry;
 use defmt_rtt as _;
 use embedded_hal::adc::OneShot;
 use panic_handler::set_panic_pin;
 use ring_buffer::RingBuffer;
-use rp2040_hal as hal;
-
-use hal::{
+use rp2040_hal::{
 	clocks::init_clocks_and_plls, pac, prelude::_rphal_pio_PIOExt, Adc, Clock,
-	Sio, Timer, Watchdog,
+	Sio, Timer, Watchdog, gpio,
 };
 use smart_leds::{
 	hsv::{hsv2rgb, Hsv},
@@ -31,8 +34,10 @@ fn entrypoint() -> ! {
 	main()
 }
 
-const BUF_LEN: usize = 100;
+const BUF_LEN: usize = 400;
 const INPUT_BIAS: u16 = 90;
+const NUM_LEDS: usize = 110;
+const OUTPUT_SMOOTHING_LENGTH: usize = 3;
 
 fn main() -> ! {
 	let mut pac = pac::Peripherals::take().unwrap();
@@ -53,7 +58,7 @@ fn main() -> ! {
 	.ok()
 	.unwrap();
 
-	let pins = hal::gpio::Pins::new(
+	let pins = gpio::Pins::new(
 		pac.IO_BANK0,
 		pac.PADS_BANK0,
 		sio.gpio_bank0,
@@ -80,23 +85,80 @@ fn main() -> ! {
 		timer.count_down(),
 	);
 
-	let mut left_buffer = RingBuffer::new([0; BUF_LEN]);
-	let mut right_buffer = RingBuffer::new([0; BUF_LEN]);
+	let mut left_smoothing_buffer = [0; BUF_LEN];
+	let mut right_smoothing_buffer = [0; BUF_LEN];
+
+	let mut left_output_buffer = RingBuffer::new([0; NUM_LEDS / 2]);
+	let mut right_output_buffer = RingBuffer::new([0; NUM_LEDS / 2]);
 
 	loop {
-		let left: u16 = adc.read(&mut left_input).unwrap();
-		let right: u16 = adc.read(&mut right_input).unwrap();
-		left_buffer.push(left.saturating_sub(INPUT_BIAS));
-		right_buffer.push(right.saturating_sub(INPUT_BIAS));
-		// let left_avg = left_buffer.iter().map(|&x| x as u32).sum::<u32>() / BUF_LEN as u32;
-		// let right_avg = right_buffer.iter().map(|&x| x as u32).sum::<u32>() / BUF_LEN as u32;
-		ws.write(left_buffer.iter().map(|&amplitude| {
-			hsv2rgb(Hsv {
-				hue: 0,
-				sat: 100,
-				val: (amplitude / 256) as u8,
-			})
-		}))
+		for (l, r) in left_smoothing_buffer
+			.iter_mut()
+			.zip(right_smoothing_buffer.iter_mut())
+		{
+			let left: u16 = adc.read(&mut left_input).unwrap();
+			let right: u16 = adc.read(&mut right_input).unwrap();
+
+			*l = left.saturating_sub(INPUT_BIAS);
+			*r = right.saturating_sub(INPUT_BIAS);
+
+			delay.delay_us(50);
+		}
+
+		let left_now =
+			left_smoothing_buffer.iter().map(|&x| x as u32).avg() as u16;
+		let right_now =
+			right_smoothing_buffer.iter().map(|&x| x as u32).avg() as u16;
+
+		let left_avg = once(left_now)
+			.chain(left_output_buffer.in_order_iter().copied())
+			.take(OUTPUT_SMOOTHING_LENGTH)
+			.enumerate()
+			.map(|(i, x)| x / (2 * (i as u16 + 1)))
+			.sum::<u16>();
+
+		let right_avg = once(right_now)
+			.chain(right_output_buffer.in_order_iter().copied())
+			.take(OUTPUT_SMOOTHING_LENGTH)
+			.enumerate()
+			.map(|(i, x)| x / (2 * (i as u16 + 1)))
+			.sum::<u16>();
+
+		left_output_buffer.push(left_avg as u16);
+		right_output_buffer.push(right_avg as u16);
+
+		ws.write(
+			left_output_buffer
+				.in_order_iter()
+				.rev()
+				.chain(right_output_buffer.in_order_iter())
+				.map(|&amplitude| {
+					hsv2rgb(Hsv {
+						hue: 0,
+						sat: 0,
+						val: (amplitude / 2).min(255) as u8,
+					})
+				}),
+		)
 		.unwrap();
+	}
+}
+
+trait Average: Iterator {
+	fn avg(self) -> Self::Item;
+}
+
+impl<I: Iterator> Average for I
+where
+	I::Item: Add<Output = I::Item> + Div<Output = I::Item> + From<bool> + Copy,
+{
+	fn avg(self) -> Self::Item {
+		let zero = I::Item::from(false);
+		let one = I::Item::from(true);
+
+		let (count, sum) =
+			self.fold((zero, zero), |(count, sum), x| (count + one, sum + x));
+
+		sum / count
 	}
 }

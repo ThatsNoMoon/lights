@@ -22,13 +22,21 @@ impl<T, const N: usize> DerefMut for RingBuffer<T, N> {
 impl<T, const N: usize> RingBuffer<T, N> {
 	pub(crate) fn new(init: [T; N]) -> Self {
 		Self {
-			pos: init.len(),
+			pos: 0,
 			inner: init,
 		}
 	}
 
 	pub(crate) fn push(&mut self, x: T) -> T {
+		let old = core::mem::replace(&mut self.inner[self.pos], x);
 		self.pos = (self.pos + 1) % self.len();
-		core::mem::replace(&mut self.inner[self.pos], x)
+		old
+	}
+
+	pub(crate) fn in_order_iter(&self) -> impl Iterator<Item = &'_ T> + DoubleEndedIterator {
+		self.inner[..self.pos]
+			.iter()
+			.rev()
+			.chain(self.inner[self.pos..].iter().rev())
 	}
 }
