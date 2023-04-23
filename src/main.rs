@@ -114,14 +114,14 @@ fn main() -> ! {
 			.chain(left_output_buffer.in_order_iter().copied())
 			.take(OUTPUT_SMOOTHING_LENGTH)
 			.enumerate()
-			.map(|(i, x)| x / (2 * (i as u16 + 1)))
+			.map(|(i, x)| x / (2 * (i as u16)).max(1))
 			.sum::<u16>();
 
 		let right_avg = once(right_now)
 			.chain(right_output_buffer.in_order_iter().copied())
 			.take(OUTPUT_SMOOTHING_LENGTH)
 			.enumerate()
-			.map(|(i, x)| x / (2 * (i as u16 + 1)))
+			.map(|(i, x)| x / (2 * (i as u16)).max(1))
 			.sum::<u16>();
 
 		left_output_buffer.push(left_avg as u16);
