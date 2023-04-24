@@ -109,9 +109,9 @@ fn main() -> ! {
 
 		ws.write(
 			left_output_buffer
-				.iter()
+				.in_order_iter()
 				.rev()
-				.chain(right_output_buffer.iter())
+				.chain(right_output_buffer.in_order_iter())
 				.copied()
 				.map(|value| {
 					hsv2rgb(Hsv {
