@@ -9,9 +9,13 @@ use core::{
 	ops::{Add, Div},
 };
 
-use cortex_m::delay::Delay;
+use cortex_m::{delay::Delay, prelude::_embedded_hal_timer_CountDown};
 use cortex_m_rt::entry;
-use embedded_hal::adc::{Channel, OneShot};
+use embedded_hal::{
+	adc::{Channel, OneShot},
+	timer::Cancel,
+};
+use fugit::ExtU64;
 use panic_handler::set_panic_pin;
 use ring_buffer::RingBuffer;
 use rp2040_hal::{
@@ -23,7 +27,7 @@ use rp2040_hal::{
 };
 use smart_leds::{
 	hsv::{hsv2rgb, Hsv},
-	SmartLedsWrite,
+	SmartLedsWrite, RGB8,
 };
 use ws2812_pio::Ws2812;
 
@@ -90,8 +94,19 @@ fn main() -> ! {
 	let mut left_sample_buffer = [0; BUF_LEN];
 	let mut right_sample_buffer = [0; BUF_LEN];
 
-	let mut left_output_buffer = RingBuffer::new([0; NUM_LEDS / 2]);
-	let mut right_output_buffer = RingBuffer::new([0; NUM_LEDS / 2]);
+	let mut left_output_buffer =
+		RingBuffer::new([Hsv16::default(); NUM_LEDS / 2]);
+	let mut right_output_buffer =
+		RingBuffer::new([Hsv16::default(); NUM_LEDS / 2]);
+
+	let mut hue = 0;
+
+	let mut target_hue = hue;
+
+	let mut hue_cycle = timer.count_down();
+	hue_cycle.start(5.secs());
+
+	let mut hue_fade = timer.count_down();
 
 	loop {
 		for (l, r) in left_sample_buffer
@@ -104,8 +119,8 @@ fn main() -> ! {
 			delay.delay_us(50);
 		}
 
-		channel_values(&mut left_sample_buffer, &mut left_output_buffer);
-		channel_values(&mut right_sample_buffer, &mut right_output_buffer);
+		channel_values(&mut left_sample_buffer, &mut left_output_buffer, hue);
+		channel_values(&mut right_sample_buffer, &mut right_output_buffer, hue);
 
 		ws.write(
 			left_output_buffer
@@ -113,15 +128,27 @@ fn main() -> ! {
 				.rev()
 				.chain(right_output_buffer.in_order_iter())
 				.copied()
-				.map(|value| {
+				.map(|Hsv16 { hue, sat, val }| {
 					hsv2rgb(Hsv {
-						hue: 0,
-						sat: 0,
-						val: (value / 4).min(255) as u8,
+						hue,
+						sat,
+						val: (val / 4).min(255) as u8,
 					})
 				}),
 		)
-		.unwrap()
+		.unwrap();
+
+		if let Ok(()) = hue_cycle.wait() {
+			target_hue = next_hue(&left_sample_buffer);
+			let dist = hue_dist(hue, target_hue);
+			hue_fade.start((dist as u64).millis());
+		}
+
+		if hue == target_hue {
+			let _ = hue_fade.cancel();
+		} else if let Ok(()) = hue_fade.wait() {
+			transition_hue(&mut hue, target_hue);
+		}
 	}
 }
 
@@ -139,18 +166,72 @@ where
 
 fn channel_values<const N: usize>(
 	samples: &mut [u16],
-	outputs: &mut RingBuffer<u16, N>,
+	outputs: &mut RingBuffer<Hsv16, N>,
+	hue: u8,
 ) {
 	let now = samples.iter().map(|&x| x as u32).avg() as u16;
 
 	let weighted_avg = once(now)
-		.chain(outputs.in_order_iter().copied())
+		.chain(outputs.in_order_iter().map(|hsv| hsv.val))
 		.take(OUTPUT_SMOOTHING_LENGTH)
 		.enumerate()
-		.map(|(i, x)| x / (2 * (i as u16)).max(1))
+		.map(|(i, x)| x / (2 * (i as u16 + 1)))
 		.sum::<u16>();
 
-	outputs.push(weighted_avg);
+	outputs.push(Hsv16 {
+		hue,
+		sat: 250,
+		val: weighted_avg,
+	});
+}
+
+#[derive(Default, Clone, Copy)]
+struct Hsv16 {
+	hue: u8,
+	sat: u8,
+	val: u16,
+}
+
+fn next_hue(samples: &[u16]) -> u8 {
+	samples
+		.iter()
+		.copied()
+		.reduce(|acc, x| xorshift(acc ^ x))
+		.unwrap() as u8
+}
+
+fn xorshift(mut x: u16) -> u16 {
+	x ^= x << 7;
+	x ^= x >> 8;
+	x ^= x << 9;
+	x
+}
+
+fn transition_hue(current: &mut u8, target: u8) {
+	if *current < target {
+		if target - *current < 128 {
+			*current += 1;
+		} else {
+			*current = current.wrapping_sub(1);
+		}
+	} else {
+		if *current - target < 128 {
+			*current -= 1;
+		} else {
+			*current = current.wrapping_add(1);
+		}
+	}
+}
+
+fn hue_dist(current: u8, target: u8) -> u8 {
+	let greater = current.max(target);
+	let lesser = current.min(target);
+	let direct_dist = greater - lesser;
+	if direct_dist > 128 {
+		255 - direct_dist
+	} else {
+		direct_dist
+	}
 }
 
 trait Average: Iterator {

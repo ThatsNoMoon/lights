@@ -154,6 +154,7 @@ dependencies = [
  "cortex-m-rt",
  "embedded-hal",
  "embedded-time",
+ "fugit",
  "rp-pico",
  "rp2040-boot2",
  "rp2040-hal",

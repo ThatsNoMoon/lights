@@ -13,6 +13,7 @@ cortex-m = "0.7.7"
 cortex-m-rt = "0.7.2"
 embedded-hal = "0.2.7"
 embedded-time = "0.12.1"
+fugit = "0.3.6"
 rp-pico = "0.7.0"
 rp2040-boot2 = "0.2.1"
 rp2040-hal = { version = "0.8.0", features = ["rt"] }
